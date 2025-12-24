@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tango Trainer (LinkedIn-stijl)</title>
+  <style>
+    :root { --cell: 48px; --gap: 10px; --line: #cfcfcf; --bad: #ffdddd; --ok: #e9ffe9; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#fafafa; color:#111; }
+    header { padding: 18px 16px; background:#fff; border-bottom:1px solid #eee; }
+    h1 { margin:0 0 6px; font-size: 18px; }
+    .sub { color:#444; font-size: 13px; }
+    main { padding: 16px; max-width: 980px; margin: 0 auto; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; align-items: center; }
+    button {
+      border: 1px solid #ddd; background:#fff; padding:10px 12px; border-radius:10px;
+      cursor:pointer; font-weight:600;
+    }
+    button:hover { background:#f3f3f3; }
+    button:disabled { opacity:0.55; cursor:not-allowed; }
+    .pill { padding:8px 10px; border:1px solid #ddd; border-radius:999px; background:#fff; font-size: 13px; }
+    .gridWrap { margin-top: 14px; display:flex; gap: 18px; flex-wrap: wrap; align-items:flex-start; }
+    .board { background:#fff; padding:14px; border:1px solid #eee; border-radius:14px; box-shadow: 0 2px 10px rgba(0,0,0,.04); }
+    .grid {
+      display:grid;
+      gap: 2px;
+      position: relative;
+      user-select: none;
+    }
+    .cell {
+      width: var(--cell); height: var(--cell);
+      display:flex; align-items:center; justify-content:center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 22px;
+      background:#fff;
+      cursor:pointer;
+      position: relative;
+    }
+    .cell.given { background:#f6f6ff; font-weight: 700; cursor: default; }
+    .cell.bad { background: var(--bad); }
+    .cell.ok { background: var(--ok); }
+    .hintMark {
+      position:absolute; inset: 0;
+      display:flex; align-items:center; justify-content:center;
+      pointer-events: none;
+      font-size: 13px;
+      color:#666;
+    }
+    .legend { font-size: 13px; color:#333; line-height:1.5; }
+    .legend code { background:#f2f2f2; padding: 1px 5px; border-radius: 6px; }
+    .side {
+      min-width: 260px;
+      flex: 1;
+      background:#fff; padding:14px; border:1px solid #eee; border-radius:14px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.04);
+    }
+    .kvs { display:grid; grid-template-columns: 1fr auto; gap: 8px 10px; font-size: 13px; }
+    .kvs div:nth-child(odd){ color:#444; }
+    .msg { margin-top:10px; padding:10px 12px; border-radius:12px; border:1px solid #eee; background:#fcfcfc; font-size: 13px; }
+    .msg.win { background:#ecfff1; border-color:#cdebd4; }
+    .msg.warn { background:#fff6e6; border-color:#f0dfb6; }
+    canvas { display:none; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Tango Trainer (LinkedIn-stijl)</h1>
+  <div class="sub">Onbeperkt oefenen • Puzzels worden pas bij start gegenereerd (niet vooraf zichtbaar) • Moeilijkheid past zich aan jouw niveau aan</div>
+</header>
+
+<main>
+  <div class="row">
+    <button id="newBtn">Nieuwe puzzel</button>
+    <button id="resetBtn" disabled>Leegmaken</button>
+    <button id="hintBtn" disabled>Hint</button>
+    <button id="checkBtn" disabled>Check regels</button>
+    <span class="pill" id="timerPill">⏱️ 00:00.0</span>
+    <span class="pill" id="diffPill">Niveau: —</span>
+    <span class="pill" id="ratingPill">Rating: —</span>
+  </div>
+
+  <div class="gridWrap">
+    <div class="board">
+      <div id="grid" class="grid" aria-label="Tango raster"></div>
+      <div class="legend" style="margin-top:10px;">
+        Klik een vakje: <code>☀️</code> → <code>🌙</code> → leeg.<br/>
+        Regels: geen <b>3 dezelfde op rij</b>, elke rij/kolom <b>evenveel</b> ☀️/🌙, en buur-relaties: <code>=</code> (zelfde) / <code>X</code> (verschillend).
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="kvs">
+        <div>Grid</div><div id="sizeTxt">—</div>
+        <div>Vaste vakjes</div><div id="givensTxt">—</div>
+        <div>Relaties (= / X)</div><div id="relsTxt">—</div>
+        <div>Jouw beste tijd (dit niveau)</div><div id="bestTxt">—</div>
+      </div>
+
+      <div class="msg" id="msgBox">
+        Klik op <b>Nieuwe puzzel</b> om te starten.
+      </div>
+
+      <div class="msg warn" style="margin-top:12px;">
+        <b>Adaptief niveau</b>: sneller & minder fouten → moeilijker (minder hints/meer constraints/evt. groter grid). Langzamer → iets makkelijker.
+      </div>
+    </div>
+  </div>
+
+<script>
+/**
+ * Tango Trainer
+ * - Genereert random Binairo-achtige oplossing (☀️/🌙) met:
+ *    * geen 3 op rij
+ *    * elke rij/kolom exact N/2 van elk symbool
+ * - Maakt puzzel door:
+ *    * enkele cellen als "givens"
+ *    * enkele buur-relaties (= of X) afgeleid van de oplossing
+ * - Controleert op unieke oplossing via solver (max 2 oplossingen).
+ * - Past moeilijkheid aan via simpele rating in localStorage.
+ */
+
+const SUN = 1, MOON = 0, EMPTY = -1;
+
+const el = (id)=>document.getElementById(id);
+const gridEl = el("grid");
+const newBtn = el("newBtn");
+const resetBtn = el("resetBtn");
+const hintBtn = el("hintBtn");
+const checkBtn = el("checkBtn");
+const msgBox = el("msgBox");
+const timerPill = el("timerPill");
+const diffPill = el("diffPill");
+const ratingPill = el("ratingPill");
+const sizeTxt = el("sizeTxt");
+const givensTxt = el("givensTxt");
+const relsTxt = el("relsTxt");
+const bestTxt = el("bestTxt");
+
+let state = {
+  size: 0,
+  givens: new Map(),        // key "r,c" -> 0/1
+  rels: [],                 // {a:[r,c], b:[r,c], type:"="|"X"}
+  board: [],                // current player board 2D
+  solution: [],             // hidden
+  startedAt: null,
+  timerHandle: null,
+  finished: false,
+  lastHint: null,
+};
+
+function pad2(n){ return String(n).padStart(2,"0"); }
+function fmtTime(ms){
+  const s = ms/1000;
+  const mm = Math.floor(s/60);
+  const ss = Math.floor(s%60);
+  const d  = Math.floor((ms%1000)/100);
+  return `${pad2(mm)}:${pad2(ss)}.${d}`;
+}
+
+function getRating(){
+  const r = Number(localStorage.getItem("tango_rating") || "850");
+  return Math.max(300, Math.min(2200, r));
+}
+function setRating(r){
+  localStorage.setItem("tango_rating", String(Math.round(r)));
+  ratingPill.textContent = `Rating: ${Math.round(r)}`;
+}
+function bestKey(params){
+  return `tango_best_${params.size}_${params.levelName}`;
+}
+function getBest(params){
+  const v = localStorage.getItem(bestKey(params));
+  return v ? Number(v) : null;
+}
+function setBest(params, ms){
+  const k = bestKey(params);
+  const cur = localStorage.getItem(k);
+  if (!cur || ms < Number(cur)) localStorage.setItem(k, String(ms));
+}
+
+function paramsFromRating(r){
+  // eenvoudige mapping
+  // size 6 tot 8 (later)
+  let size = 6;
+  if (r >= 1250) size = 6;
+  if (r >= 1550) size = 8; // hogere rating -> groter grid
+  // moeilijkheid bepaalt hoeveelheid gegeven cellen en relaties
+  // lager: meer givens en meer relaties (meer houvast)
+  // hoger: minder givens/relaties (sneller is moeilijker)
+  let levelName = "Beginner";
+  let givens = 10, rels = 14;
+
+  if (r >= 950)  { levelName="Novice";  givens=9;  rels=13; }
+  if (r >= 1100) { levelName="Medium";  givens=8;  rels=12; }
+  if (r >= 1250) { levelName="Hard";    givens=7;  rels=11; }
+  if (r >= 1400) { levelName="Expert";  givens=6;  rels=10; }
+  if (r >= 1550) { levelName="Master";  givens=10; rels=18; } // 8x8 vraagt iets meer clues
+  if (r >= 1750) { levelName="Grandmaster"; givens=8; rels=16; }
+
+  return { size, givens, rels, levelName };
+}
+
+// ---------- Utility ----------
+function keyOf(r,c){ return `${r},${c}`; }
+function cloneBoard(b){ return b.map(row=>row.slice()); }
+function inBounds(n,r,c){ return r>=0 && c>=0 && r<n && c<n; }
+function shuffle(arr){
+  for (let i=arr.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+function sym(v){
+  if (v===SUN) return "☀️";
+  if (v===MOON) return "🌙";
+  return "";
+}
+
+// ---------- Constraints ----------
+function noThreeRuleLine(line){
+  // line: array of -1/0/1
+  // returns true if no violation (no 3 identical consecutive filled)
+  for (let i=0;i<line.length-2;i++){
+    const a=line[i], b=line[i+1], c=line[i+2];
+    if (a!==EMPTY && a===b && b===c) return false;
+  }
+  return true;
+}
+function balanceRulePartial(line){
+  // at most N/2 of each (partial ok)
+  const n=line.length, half=n/2;
+  let s=0,m=0,e=0;
+  for (const v of line){
+    if (v===SUN) s++;
+    else if (v===MOON) m++;
+    else e++;
+  }
+  if (s>half || m>half) return false;
+  // if no empties, must be exact
+  if (e===0 && (s!==half || m!==half)) return false;
+  return true;
+}
+function getRow(b,r){ return b[r]; }
+function getCol(b,c){ return b.map(row=>row[c]); }
+
+function relSatisfied(b, rel){
+  const [r1,c1]=rel.a, [r2,c2]=rel.b;
+  const v1=b[r1][c1], v2=b[r2][c2];
+  if (v1===EMPTY || v2===EMPTY) return true;
+  if (rel.type==="=") return v1===v2;
+  return v1!==v2; // X
+}
+
+// Full validation (for UI check)
+function validateAll(b, rels){
+  const n=b.length;
+  // rows/cols rules
+  for (let r=0;r<n;r++){
+    const row=getRow(b,r);
+    if (!noThreeRuleLine(row)) return false;
+    if (!balanceRulePartial(row)) return false;
+  }
+  for (let c=0;c<n;c++){
+    const col=getCol(b,c);
+    if (!noThreeRuleLine(col)) return false;
+    if (!balanceRulePartial(col)) return false;
+  }
+  // rels
+  for (const rel of rels){
+    if (!relSatisfied(b, rel)) return false;
+  }
+  return true;
+}
+
+// Propagation: force placements via obvious rules
+function propagate(b, rels){
+  const n=b.length;
+  let changed=false;
+
+  // Helper to set if empty
+  function setCell(r,c,v){
+    if (b[r][c]===EMPTY){
+      b[r][c]=v; changed=true; return true;
+    }
+    return (b[r][c]===v);
+  }
+
+  // Apply local 3-in-row constraints and balance constraints
+  for (let r=0;r<n;r++){
+    for (let c=0;c<n;c++){
+      // patterns: XX_ or _XX or X_X -> force opposite
+      const v=b[r][c];
+
+      // horizontal triplets windows
+      for (let start=c-2; start<=c; start++){
+        if (start<0 || start+2>=n) continue;
+        const a=b[r][start], m=b[r][start+1], z=b[r][start+2];
+        // if two same filled and one empty -> fill opposite in empty
+        const arr=[a,m,z];
+        const empties = arr.map((x,i)=>x===EMPTY?i:-1).filter(i=>i!==-1);
+        if (empties.length===1){
+          const iE=empties[0];
+          const filled=arr.filter(x=>x!==EMPTY);
+          if (filled.length===2 && filled[0]===filled[1]){
+            const force = 1-filled[0];
+            const cc = start+iE;
+            if (!setCell(r,cc,force)) return { ok:false };
+          }
+        }
+      }
+
+      // vertical triplets windows
+      for (let start=r-2; start<=r; start++){
+        if (start<0 || start+2>=n) continue;
+        const a=b[start][c], m=b[start+1][c], z=b[start+2][c];
+        const arr=[a,m,z];
+        const empties = arr.map((x,i)=>x===EMPTY?i:-1).filter(i=>i!==-1);
+        if (empties.length===1){
+          const iE=empties[0];
+          const filled=arr.filter(x=>x!==EMPTY);
+          if (filled.length===2 && filled[0]===filled[1]){
+            const force = 1-filled[0];
+            const rr = start+iE;
+            if (!setCell(rr,c,force)) return { ok:false };
+          }
+        }
+      }
+    }
+
+    // Balance row: if already half suns, rest moons (and vice versa)
+    const row=b[r];
+    const half=n/2;
+    const s=row.filter(x=>x===SUN).length;
+    const m=row.filter(x=>x===MOON).length;
+    if (s===half){
+      for (let c=0;c<n;c++) if (row[c]===EMPTY) if (!setCell(r,c,MOON)) return { ok:false };
+    }
+    if (m===half){
+      for (let c=0;c<n;c++) if (row[c]===EMPTY) if (!setCell(r,c,SUN)) return { ok:false };
+    }
+  }
+
+  // Balance cols
+  for (let c=0;c<n;c++){
+    const col=getCol(b,c);
+    const half=n/2;
+    const s=col.filter(x=>x===SUN).length;
+    const m=col.filter(x=>x===MOON).length;
+    if (s===half){
+      for (let r=0;r<n;r++) if (b[r][c]===EMPTY) if (!setCell(r,c,MOON)) return { ok:false };
+    }
+    if (m===half){
+      for (let r=0;r<n;r++) if (b[r][c]===EMPTY) if (!setCell(r,c,SUN)) return { ok:false };
+    }
+  }
+
+  // Relations: if one side known, force other
+  for (const rel of rels){
+    const [r1,c1]=rel.a, [r2,c2]=rel.b;
+    const v1=b[r1][c1], v2=b[r2][c2];
+    if (v1!==EMPTY && v2===EMPTY){
+      const force = (rel.type==="=") ? v1 : 1-v1;
+      if (!setCell(r2,c2,force)) return { ok:false };
+    } else if (v2!==EMPTY && v1===EMPTY){
+      const force = (rel.type==="=") ? v2 : 1-v2;
+      if (!setCell(r1,c1,force)) return { ok:false };
+    }
+  }
+
+  // final quick validity check
+  if (!validateAll(b, rels)) return { ok:false };
+  return { ok:true, changed };
+}
+
+// Solver: count solutions up to limit (2)
+function countSolutions(puzzleBoard, rels, limit=2){
+  const n=puzzleBoard.length;
+  let solutions=0;
+
+  function pickCell(b){
+    // pick empty cell with most constrained heuristic (row/col counts)
+    let best=null, bestScore=-1;
+    for (let r=0;r<n;r++){
+      for (let c=0;c<n;c++){
+        if (b[r][c]!==EMPTY) continue;
+        const row=b[r], col=getCol(b,c);
+        const sR=row.filter(x=>x===SUN).length, mR=row.filter(x=>x===MOON).length;
+        const sC=col.filter(x=>x===SUN).length, mC=col.filter(x=>x===MOON).length;
+        const score = (sR+mR) + (sC+mC);
+        if (score>bestScore){ bestScore=score; best=[r,c]; }
+      }
+    }
+    return best;
+  }
+
+  function dfs(b){
+    if (solutions>=limit) return;
+    // propagate until stable
+    while (true){
+      const res=propagate(b, rels);
+      if (!res.ok) return;
+      if (!res.changed) break;
+    }
+
+    // find empty
+    let anyEmpty=false;
+    for (let r=0;r<n;r++){
+      for (let c=0;c<n;c++){
+        if (b[r][c]===EMPTY){ anyEmpty=true; break; }
+      }
+      if (anyEmpty) break;
+    }
+    if (!anyEmpty){
+      solutions++;
+      return;
+    }
+
+    const [r,c]=pickCell(b);
+    // try both
+    for (const v of [SUN, MOON]){
+      const nb=cloneBoard(b);
+      nb[r][c]=v;
+      if (!validateAll(nb, rels)) continue;
+      dfs(nb);
+      if (solutions>=limit) return;
+    }
+  }
+
+  dfs(cloneBoard(puzzleBoard));
+  return solutions;
+}
+
+// ---------- Generator ----------
+function generateSolution(n){
+  // backtracking fill with constraints
+  const b = Array.from({length:n},()=>Array(n).fill(EMPTY));
+
+  function validPlace(r,c,v){
+    b[r][c]=v;
+    // check local validity
+    if (!validateAll(b, [])) { b[r][c]=EMPTY; return false; }
+    b[r][c]=EMPTY;
+    return true;
+  }
+
+  function nextPos(idx){ return [Math.floor(idx/n), idx%n]; }
+
+  function fill(idx){
+    if (idx===n*n) return true;
+    const [r,c]=nextPos(idx);
+    // order values randomly
+    const vals = Math.random()<0.5 ? [SUN,MOON] : [MOON,SUN];
+    for (const v of vals){
+      if (!validPlace(r,c,v)) continue;
+      b[r][c]=v;
+      // quick prune: balance constraints already in validateAll
+      if (fill(idx+1)) return true;
+      b[r][c]=EMPTY;
+    }
+    return false;
+  }
+
+  // Try multiple times (should be quick for 6/8)
+  for (let t=0;t<200;t++){
+    for (let r=0;r<n;r++) b[r].fill(EMPTY);
+    if (fill(0)) return cloneBoard(b);
+  }
+  throw new Error("Kon geen oplossing genereren (probeer opnieuw).");
+}
+
+function generatePuzzle(params){
+  const n=params.size;
+
+  for (let attempt=0; attempt<300; attempt++){
+    const solution = generateSolution(n);
+
+    // pick givens
+    const allCells=[];
+    for (let r=0;r<n;r++) for (let c=0;c<n;c++) allCells.push([r,c]);
+    shuffle(allCells);
+    const givensMap=new Map();
+    for (let i=0;i<params.givens;i++){
+      const [r,c]=allCells[i];
+      givensMap.set(keyOf(r,c), solution[r][c]);
+    }
+
+    // pick relations among orthogonal neighbors
+    const edges=[];
+    for (let r=0;r<n;r++){
+      for (let c=0;c<n;c++){
+        if (c+1<n) edges.push([[r,c],[r,c+1]]);
+        if (r+1<n) edges.push([[r,c],[r+1,c]]);
+      }
+    }
+    shuffle(edges);
+    const rels=[];
+    for (let i=0;i<Math.min(params.rels, edges.length); i++){
+      const [a,b]=edges[i];
+      const [r1,c1]=a, [r2,c2]=b;
+      const type = (solution[r1][c1]===solution[r2][c2]) ? "=" : "X";
+      rels.push({a,b,type});
+    }
+
+    // build initial board
+    const board = Array.from({length:n},()=>Array(n).fill(EMPTY));
+    for (const [k,v] of givensMap.entries()){
+      const [r,c]=k.split(",").map(Number);
+      board[r][c]=v;
+    }
+
+    // ensure solvable + unique
+    if (!validateAll(board, rels)) continue;
+    const solCount = countSolutions(board, rels, 2);
+    if (solCount!==1) continue;
+
+    return { size:n, solution, givens: givensMap, rels, board };
+  }
+
+  throw new Error("Kon geen unieke puzzel vinden. Klik opnieuw op 'Nieuwe puzzel'.");
+}
+
+// ---------- UI ----------
+function stopTimer(){
+  if (state.timerHandle) clearInterval(state.timerHandle);
+  state.timerHandle=null;
+}
+function startTimer(){
+  state.startedAt = performance.now();
+  stopTimer();
+  state.timerHandle = setInterval(()=>{
+    if (!state.startedAt) return;
+    const ms = performance.now() - state.startedAt;
+    timerPill.textContent = `⏱️ ${fmtTime(ms)}`;
+  }, 100);
+}
+
+function setMessage(text, kind=null){
+  msgBox.className = "msg" + (kind ? ` ${kind}` : "");
+  msgBox.innerHTML = text;
+}
+
+function render(){
+  const n=state.size;
+  gridEl.style.gridTemplateColumns = `repeat(${n}, var(--cell))`;
+  gridEl.innerHTML="";
+
+  // Build quick lookup for relations between right/down neighbors for rendering in cell overlay
+  const relRight = new Map(); // key "r,c" means between (r,c)-(r,c+1)
+  const relDown  = new Map(); // key "r,c" means between (r,c)-(r+1,c)
+  for (const rel of state.rels){
+    const [r1,c1]=rel.a, [r2,c2]=rel.b;
+    if (r1===r2 && c2===c1+1) relRight.set(keyOf(r1,c1), rel.type);
+    else if (r2===r1 && c1===c2+1) relRight.set(keyOf(r2,c2), rel.type);
+    else if (c1===c2 && r2===r1+1) relDown.set(keyOf(r1,c1), rel.type);
+    else if (c2===c1 && r1===r2+1) relDown.set(keyOf(r2,c2), rel.type);
+  }
+
+  for (let r=0;r<n;r++){
+    for (let c=0;c<n;c++){
+      const cell=document.createElement("div");
+      cell.className="cell";
+      const k=keyOf(r,c);
+      const isGiven=state.givens.has(k);
+      if (isGiven) cell.classList.add("given");
+      const v=state.board[r][c];
+      cell.textContent = sym(v);
+
+      // relation marks: show "=" or "X" on the border area (right/down) via pseudo overlay
+      const right = relRight.get(k);
+      const down  = relDown.get(k);
+
+      if (right){
+        const m=document.createElement("div");
+        m.className="hintMark";
+        m.style.justifyContent="flex-end";
+        m.style.paddingRight="2px";
+        m.style.fontSize="12px";
+        m.textContent = right;
+        cell.appendChild(m);
+      }
+      if (down){
+        const m=document.createElement("div");
+        m.className="hintMark";
+        m.style.alignItems="flex-end";
+        m.style.paddingBottom="2px";
+        m.style.fontSize="12px";
+        m.textContent = down;
+        cell.appendChild(m);
+      }
+
+      if (!isGiven && !state.finished){
+        cell.addEventListener("click", ()=>{
+          cycleCell(r,c);
+        });
+      }
+
+      gridEl.appendChild(cell);
+    }
+  }
+}
+
+function cycleCell(r,c){
+  const cur=state.board[r][c];
+  const next = (cur===EMPTY) ? SUN : (cur===SUN) ? MOON : EMPTY;
+  state.board[r][c]=next;
+  // light feedback
+  const ok = validateAll(state.board, state.rels);
+  render();
+  if (!ok) setMessage("Er is minimaal 1 regel overtreden. Je kunt verdergaan, maar probeer het te herstellen.", "warn");
+  else setMessage("✅ Tot nu toe klopt het met de regels. Ga door!", null);
+  maybeWin();
+}
+
+function maybeWin(){
+  if (state.finished) return;
+  const n=state.size;
+  for (let r=0;r<n;r++) for (let c=0;c<n;c++) if (state.board[r][c]===EMPTY) return;
+  if (!validateAll(state.board, state.rels)) return;
+
+  // solved
+  state.finished=true;
+  stopTimer();
+  const ms = performance.now() - state.startedAt;
+  const params=paramsFromRating(getRating());
+  setBest(params, ms);
+
+  // update rating (simple)
+  // target time depends on size/level
+  const baseTarget = (params.size===6) ? 120000 : 240000; // 2min / 4min
+  const levelFactor = ({Beginner:1.25,Novice:1.15,Medium:1.0,Hard:0.9,Expert:0.8,Master:0.85,Grandmaster:0.75}[params.levelName] || 1.0);
+  const target = baseTarget * levelFactor;
+
+  let r = getRating();
+  const score = Math.max(0, Math.min(1.8, target / Math.max(5000, ms))); // >1 is better-than-target
+  // rating delta
+  const delta = (score-1.0) * 90; // +- ~90
+  r = r + delta;
+  setRating(r);
+
+  setMessage(`🎉 Opgelost in <b>${fmtTime(ms)}</b>.<br/>Je nieuwe rating is <b>${Math.round(r)}</b>. Klik op <b>Nieuwe puzzel</b> voor de volgende.`, "win");
+  updateSide(params);
+  resetBtn.disabled=true;
+  hintBtn.disabled=true;
+  checkBtn.disabled=true;
+}
+
+function updateSide(params){
+  sizeTxt.textContent = `${state.size}×${state.size}`;
+  givensTxt.textContent = String(state.givens.size);
+  relsTxt.textContent = String(state.rels.length);
+  diffPill.textContent = `Niveau: ${params.levelName}`;
+  ratingPill.textContent = `Rating: ${Math.round(getRating())}`;
+
+  const best = getBest(params);
+  bestTxt.textContent = best ? fmtTime(best) : "—";
+}
+
+function resetBoardKeepGivens(){
+  const n=state.size;
+  for (let r=0;r<n;r++){
+    for (let c=0;c<n;c++){
+      const k=keyOf(r,c);
+      if (!state.givens.has(k)) state.board[r][c]=EMPTY;
+    }
+  }
+  render();
+  setMessage("Leeggemaakt (vaste vakjes blijven staan).", null);
+}
+
+function hint(){
+  // Geef één correcte plaatsing (zonder de hele oplossing te tonen)
+  // Kies random leeg vakje en vul met oplossing
+  const n=state.size;
+  const empties=[];
+  for (let r=0;r<n;r++) for (let c=0;c<n;c++){
+    const k=keyOf(r,c);
+    if (!state.givens.has(k) && state.board[r][c]===EMPTY) empties.push([r,c]);
+  }
+  if (!empties.length){
+    setMessage("Geen lege vakjes meer voor een hint.", "warn");
+    return;
+  }
+  const [r,c]=empties[Math.floor(Math.random()*empties.length)];
+  state.board[r][c]=state.solution[r][c];
+  render();
+  setMessage(`Hint: vakje (${r+1},${c+1}) is <b>${sym(state.solution[r][c])}</b>.`, null);
+  maybeWin();
+}
+
+function checkRules(){
+  const ok = validateAll(state.board, state.rels);
+  if (ok) setMessage("✅ Alles voldoet aan de regels (voor wat je nu ingevuld hebt).", null);
+  else setMessage("⚠️ Er is een regel-overtreding. Zoek: 3-op-rij, balans in rij/kolom, of =/X relaties.", "warn");
+}
+
+function newPuzzle(){
+  stopTimer();
+  const rating=getRating();
+  const params=paramsFromRating(rating);
+
+  setMessage("Puzzel aan het maken…", null);
+
+  try{
+    const p = generatePuzzle(params);
+    state.size = p.size;
+    state.givens = p.givens;
+    state.rels = p.rels;
+    state.board = p.board;
+    state.solution = p.solution;
+    state.finished=false;
+
+    render();
+    updateSide(params);
+
+    resetBtn.disabled=false;
+    hintBtn.disabled=false;
+    checkBtn.disabled=false;
+
+    timerPill.textContent = `⏱️ 00:00.0`;
+    startTimer();
+
+    setMessage(`Start! Niveau <b>${params.levelName}</b>. Succes 👇`, null);
+  } catch(err){
+    console.error(err);
+    setMessage(`Kon geen puzzel maken. Probeer nog eens. (${err.message})`, "warn");
+  }
+}
+
+// Wire up
+newBtn.addEventListener("click", newPuzzle);
+resetBtn.addEventListener("click", ()=>{ if(!state.finished) resetBoardKeepGivens(); });
+hintBtn.addEventListener("click", ()=>{ if(!state.finished) hint(); });
+checkBtn.addEventListener("click", ()=>{ if(!state.finished) checkRules(); });
+
+// init
+setRating(getRating());
+</script>
+</main>
+</body>
+</html>
