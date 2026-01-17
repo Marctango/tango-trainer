@@ -180,14 +180,12 @@ function setBest(params, ms){
 }
 
 function paramsFromRating(r){
-  // eenvoudige mapping
-  // size 6 tot 8 (later)
-  let size = 6;
-  if (r >= 1250) size = 6;
-  if (r >= 2500) size = 8; // hogere rating -> groter grid
+  // Altijd 6x6
+  const size = 6;
+
   // moeilijkheid bepaalt hoeveelheid gegeven cellen en relaties
-  // lager: meer givens en meer relaties (meer houvast)
-  // hoger: minder givens/relaties (sneller is moeilijker)
+  // lager: meer givens/relaties (meer houvast)
+  // hoger: minder givens/relaties (moeilijker)
   let levelName = "Beginner";
   let givens = 10, rels = 14;
 
@@ -195,8 +193,12 @@ function paramsFromRating(r){
   if (r >= 1100) { levelName="Medium";  givens=8;  rels=12; }
   if (r >= 1250) { levelName="Hard";    givens=7;  rels=11; }
   if (r >= 1400) { levelName="Expert";  givens=6;  rels=10; }
-  if (r >= 1550) { levelName="Master";  givens=10; rels=18; } // 8x8 vraagt iets meer clues
-  if (r >= 1750) { levelName="Grandmaster"; givens=8; rels=16; }
+  if (r >= 1550) { levelName="Master";  givens=5;  rels=9;  }
+  if (r >= 1750) { levelName="Grandmaster"; givens=4; rels=8; }
+
+  // Guardrails: niet te extreem
+  givens = Math.max(3, Math.min(12, givens));
+  rels   = Math.max(6, Math.min(18, rels));
 
   return { size, givens, rels, levelName };
 }
@@ -740,4 +742,5 @@ setRating(getRating());
 </main>
 </body>
 </html>
+
 
