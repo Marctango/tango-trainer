@@ -180,15 +180,17 @@ function setBest(params, ms){
 }
 
 function paramsFromRating(r){
-  // Altijd 6x6
-  const size = 6;
+  let size = 6; // standaard altijd 6x6
 
-  // moeilijkheid bepaalt hoeveelheid gegeven cellen en relaties
-  // lager: meer givens/relaties (meer houvast)
-  // hoger: minder givens/relaties (moeilijker)
   let levelName = "Beginner";
   let givens = 10, rels = 14;
 
+  // 🔑 Grid size switch pas bij 2500+
+  if (r >= 2500) {
+    size = 8;
+  }
+
+  // Moeilijkheid schaalt verder zoals nu
   if (r >= 950)  { levelName="Novice";  givens=9;  rels=13; }
   if (r >= 1100) { levelName="Medium";  givens=8;  rels=12; }
   if (r >= 1250) { levelName="Hard";    givens=7;  rels=11; }
@@ -196,9 +198,12 @@ function paramsFromRating(r){
   if (r >= 1550) { levelName="Master";  givens=5;  rels=9;  }
   if (r >= 1750) { levelName="Grandmaster"; givens=4; rels=8; }
 
-  // Guardrails: niet te extreem
-  givens = Math.max(3, Math.min(12, givens));
-  rels   = Math.max(6, Math.min(18, rels));
+  // Optioneel: 8x8 iets meer clues geven (anders wordt het bruut)
+  if (r >= 2500) {
+    levelName = "8×8 Elite";
+    givens = Math.max(givens + 3, 8);
+    rels   = Math.max(rels + 4, 12);
+  }
 
   return { size, givens, rels, levelName };
 }
@@ -742,5 +747,6 @@ setRating(getRating());
 </main>
 </body>
 </html>
+
 
 
